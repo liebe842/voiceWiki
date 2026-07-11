@@ -1,0 +1,5 @@
+# Claude Code 로컬 설정
+.claude/settings.local.json
+
+# clasp 자격증명 (혹시라도 생성될 경우)
+.clasprc.json

@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>보이스위키</title>
+  <style>
+    :root {
+      --bg: #0f1115; --card: #171a21; --text: #e8eaed; --muted: #9aa0a6;
+      --accent: #e5484d; --accent-dim: #7a2528; --ok: #3fb950; --border: #262b33;
+    }
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: -apple-system, "Noto Sans KR", "Malgun Gothic", sans-serif;
+      display: flex; flex-direction: column; min-height: 100vh;
+      padding: 24px 20px calc(24px + env(safe-area-inset-bottom));
+    }
+    header { text-align: center; padding-top: 8px; }
+    header h1 { font-size: 22px; margin: 0; letter-spacing: -0.5px; }
+    header p { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
+
+    main { flex: 1; display: flex; flex-direction: column; align-items: center;
+           justify-content: center; gap: 28px; }
+
+    .rec-btn {
+      width: 200px; height: 200px; border-radius: 50%; border: none;
+      background: var(--accent); color: #fff; font-size: 20px; font-weight: 600;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 10px; cursor: pointer; transition: transform .1s ease, background .2s ease;
+      box-shadow: 0 8px 30px rgba(229,72,77,.35);
+    }
+    .rec-btn:active { transform: scale(.96); }
+    .rec-btn .icon { font-size: 44px; line-height: 1; }
+    .rec-btn.recording { background: var(--accent-dim); animation: pulse 1.2s infinite; }
+    .rec-btn:disabled { opacity: .5; box-shadow: none; }
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(229,72,77,.5); }
+      50% { box-shadow: 0 0 0 22px rgba(229,72,77,0); }
+    }
+
+    .timer { font-size: 34px; font-variant-numeric: tabular-nums; min-height: 40px; }
+    .status { color: var(--muted); font-size: 14px; text-align: center; min-height: 20px; padding: 0 10px; }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--accent); }
+
+    .actions { display: flex; gap: 12px; width: 100%; max-width: 420px; margin: 0 auto; }
+    .actions button {
+      flex: 1; padding: 18px; font-size: 17px; font-weight: 600; border-radius: 14px;
+      border: 1px solid var(--border); cursor: pointer;
+      transition: transform .1s ease, opacity .2s ease;
+    }
+    .actions button:active { transform: scale(.97); }
+    .actions button:disabled { opacity: .4; }
+    .btn-save { background: var(--ok); color: #04150a; border-color: transparent; }
+    .btn-reset { background: var(--card); color: var(--text); }
+
+    audio { width: 100%; max-width: 420px; margin: 0 auto; }
+
+    .repo-picker { display: flex; flex-direction: column; gap: 6px; width: 100%;
+                   max-width: 420px; margin: 16px auto 0; }
+    .repo-picker label { color: var(--muted); font-size: 12px; padding-left: 2px; }
+    .repo-picker select {
+      width: 100%; padding: 12px 14px; font-size: 15px; border-radius: 12px;
+      background: var(--card); color: var(--text); border: 1px solid var(--border);
+      appearance: none; cursor: pointer;
+    }
+    .repo-picker select:disabled { opacity: .5; cursor: default; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>보이스위키</h1>
+    <p>말하면 위키에 쌓입니다</p>
+  </header>
+
+  <main>
+    <div class="timer" id="timer">00:00</div>
+    <button class="rec-btn" id="recBtn">
+      <span class="icon" id="recIcon">🎙️</span>
+      <span id="recLabel">녹음</span>
+    </button>
+    <div class="status" id="status">마이크 버튼을 눌러 녹음하세요</div>
+    <audio id="player" controls hidden></audio>
+
+    <div class="repo-picker">
+      <label for="repoSelect">저장소</label>
+      <select id="repoSelect" disabled>
+        <option value="">저장소 불러오는 중…</option>
+      </select>
+    </div>
+  </main>
+
+  <div class="actions">
+    <button class="btn-reset" id="resetBtn" disabled>다시</button>
+    <button class="btn-save" id="saveBtn" disabled>위키에 저장</button>
+  </div>
+
+  <script>
+    // ── 설정 ────────────────────────────────────────────
+    // GAS 웹앱 배포 URL (/exec). clasp 재배포 후 값이 바뀌면 여기도 갱신.
+    const GAS_URL = 'https://script.google.com/macros/s/AKfycby9Xwhwjy1PbNG1dApRMa_nQi-OdACI0Nkt0aSCNR0d_iH5y5kvih2FIzVRqGTa-rSysA/exec';
+    // Code.gs의 VW_TOKEN과 반드시 일치.
+    const TOKEN = 'vwk-7f3a91c4e28b5d06';
+    // ────────────────────────────────────────────────────
+
+    let mediaRecorder = null, chunks = [], recordedBlob = null;
+    let recordedMime = '', recordedAt = null, timerInt = null, seconds = 0;
+
+    const el = (id) => document.getElementById(id);
+    const recBtn = el('recBtn'), recIcon = el('recIcon'), recLabel = el('recLabel');
+    const saveBtn = el('saveBtn'), resetBtn = el('resetBtn');
+    const statusEl = el('status'), timerEl = el('timer'), player = el('player');
+    const repoSelect = el('repoSelect');
+
+    function setStatus(msg, kind) {
+      statusEl.textContent = msg;
+      statusEl.className = 'status' + (kind ? ' ' + kind : '');
+    }
+
+    // ── 저장소 선택 ──────────────────────────────────────
+    const REPO_KEY = 'vw_repo';
+    // JSONP 실패 시 폴백 라벨(백엔드 REPOS와 일치). 정상 로드되면 서버 라벨로 덮어씀.
+    const FALLBACK_REPOS = [{ key: 'voice', name: '바이브코딩' }, { key: 'second', name: '일상기록' }];
+
+    function fillRepos(repos) {
+      const list = (repos && repos.length) ? repos : FALLBACK_REPOS;
+      const saved = localStorage.getItem(REPO_KEY);
+      repoSelect.innerHTML = '';
+      list.forEach((r) => {
+        const opt = document.createElement('option');
+        opt.value = r.key;
+        opt.textContent = r.name;
+        repoSelect.appendChild(opt);
+      });
+      // 저장된 선택이 목록에 있으면 복원, 없으면 첫 번째
+      if (saved && list.some((r) => r.key === saved)) repoSelect.value = saved;
+      else localStorage.setItem(REPO_KEY, repoSelect.value);
+      repoSelect.disabled = false;
+    }
+
+    repoSelect.addEventListener('change', () => {
+      localStorage.setItem(REPO_KEY, repoSelect.value);
+    });
+
+    // JSONP로 폴더 이름 목록을 로드(no-cors 때문에 fetch로는 응답을 못 읽음).
+    (function loadRepos() {
+      let done = false;
+      window.vwRepos = (data) => {
+        done = true;
+        fillRepos(data && data.repos);
+      };
+      const s = document.createElement('script');
+      s.src = GAS_URL + '?list=1&token=' + encodeURIComponent(TOKEN) + '&callback=vwRepos';
+      s.onerror = () => { if (!done) fillRepos(null); };
+      document.head.appendChild(s);
+      // 타임아웃 폴백
+      setTimeout(() => { if (!done) fillRepos(null); }, 8000);
+    })();
+
+    function pickMimeType() {
+      const prefs = ['audio/ogg;codecs=opus', 'audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+      for (const t of prefs) {
+        if (window.MediaRecorder && MediaRecorder.isTypeSupported(t)) return t;
+      }
+      return '';
+    }
+
+    function fmt(s) {
+      const m = Math.floor(s / 60), sec = s % 60;
+      return String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+    }
+    function startTimer() {
+      seconds = 0; timerEl.textContent = '00:00';
+      timerInt = setInterval(() => { seconds++; timerEl.textContent = fmt(seconds); }, 1000);
+    }
+    function stopTimer() { clearInterval(timerInt); timerInt = null; }
+
+    async function startRecording() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mime = pickMimeType();
+        recordedMime = mime;
+        mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+        chunks = [];
+        mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+        mediaRecorder.onstop = () => {
+          const type = mediaRecorder.mimeType || recordedMime || 'audio/webm';
+          recordedMime = type;
+          recordedBlob = new Blob(chunks, { type });
+          player.src = URL.createObjectURL(recordedBlob);
+          player.hidden = false;
+          stream.getTracks().forEach(t => t.stop());
+          saveBtn.disabled = false; resetBtn.disabled = false;
+          setStatus('녹음 완료 — 저장하거나 다시 녹음하세요', 'ok');
+        };
+        mediaRecorder.start();
+        recordedAt = new Date();
+        recBtn.classList.add('recording');
+        recIcon.textContent = '⏹️'; recLabel.textContent = '정지';
+        saveBtn.disabled = true; resetBtn.disabled = true; player.hidden = true;
+        setStatus('녹음 중…', null);
+        startTimer();
+      } catch (err) {
+        setStatus('마이크 접근 실패: ' + err.message, 'err');
+      }
+    }
+
+    function stopRecording() {
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+      stopTimer();
+      recBtn.classList.remove('recording');
+      recIcon.textContent = '🎙️'; recLabel.textContent = '녹음';
+    }
+
+    recBtn.addEventListener('click', () => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording();
+      else startRecording();
+    });
+
+    resetBtn.addEventListener('click', () => {
+      recordedBlob = null;
+      player.hidden = true; player.removeAttribute('src');
+      saveBtn.disabled = true; resetBtn.disabled = true;
+      timerEl.textContent = '00:00';
+      setStatus('마이크 버튼을 눌러 녹음하세요', null);
+    });
+
+    function blobToBase64(blob) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result.split(',')[1]); // data URL 접두사 제거
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+
+    saveBtn.addEventListener('click', async () => {
+      if (!recordedBlob) return;
+      saveBtn.disabled = true; resetBtn.disabled = true; recBtn.disabled = true;
+      setStatus('저장 중…', null);
+      try {
+        const base64 = await blobToBase64(recordedBlob);
+        // GAS는 교차출처 응답에 CORS 헤더를 안 붙이므로 no-cors로 던지고 낙관적으로 처리.
+        // text/plain은 프리플라이트 없는 단순 요청이라 그대로 전달됨.
+        await fetch(GAS_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            token: TOKEN,
+            audio: base64,
+            mime: recordedMime,
+            ts: recordedAt ? recordedAt.toISOString() : null,
+            repo: repoSelect.value || localStorage.getItem(REPO_KEY) || 'voice'
+          })
+        });
+        recBtn.disabled = false;
+        setStatus('✅ 전송됨 — Drive raw/voice 폴더를 확인하세요', 'ok');
+        resetBtn.disabled = false;
+      } catch (err) {
+        recBtn.disabled = false;
+        setStatus('전송 실패: ' + err.message, 'err');
+        saveBtn.disabled = false; resetBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

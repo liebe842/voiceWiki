@@ -23,6 +23,10 @@ const DEFAULT_REPO = 'voice';
 // 하위호환: 폴더 하나만 참조하는 수동 함수용(transcribeLatest 등)
 const VOICE_FOLDER_ID = REPOS[DEFAULT_REPO].id;
 
+// 저널형 저장소: 음성을 daily-journal 규칙(entries/YYYY-MM-DD.md, 저널 프론트매터)으로
+// 이어붙여 저장한다. 그 외 저장소는 기본 위키 source 스키마(.md 1건)로 저장.
+const JOURNAL_REPOS = { second: true }; // 일상기록 → daily-journal/entries
+
 // 아무나 POST 못 하게 막는 공유 토큰. 프론트(web/index.html)의 TOKEN과 반드시 일치.
 const VW_TOKEN = 'vwk-7f3a91c4e28b5d06';
 
@@ -141,7 +145,13 @@ function doPost(e) {
     try {
       // 정상 흐름: 전사 → .md 만 생성 (오디오 저장 안 함)
       const parsed = transcribe_(body.audio, body.mime);
-      const md = writeMarkdown_(folder, nameBase, when, parsed);
+      let md;
+      if (JOURNAL_REPOS[body.repo]) {
+        // 저널 저장소: entries/YYYY-MM-DD.md 에 저널 형식으로 이어붙임
+        md = writeJournalEntry_(childFolder_(folder, 'entries'), when, parsed);
+      } else {
+        md = writeMarkdown_(folder, nameBase, when, parsed);
+      }
       return json({ ok: true, md: md.getName(), title: parsed.title });
     } catch (tErr) {
       // 실패 시에만 원본 오디오를 백업 저장해 메모 유실 방지
@@ -224,6 +234,33 @@ function writeMarkdown_(folder, nameBase, whenDate, parsed, tag) {
     parsed.summary + '\n\n' +
     parsed.body + '\n';
   return folder.createFile(nameBase + '.md', md, 'text/markdown');
+}
+
+/**
+ * daily-journal 규칙에 맞춘 저널 기록을 entries/YYYY-MM-DD.md에 저장.
+ * 같은 날 파일이 있으면 '## HH:mm' 블록으로 이어붙이고, 없으면 프론트매터와 함께 생성.
+ */
+function writeJournalEntry_(folder, whenDate, parsed) {
+  const dateStr = Utilities.formatDate(whenDate, 'Asia/Seoul', 'yyyy-MM-dd');
+  const timeStr = Utilities.formatDate(whenDate, 'Asia/Seoul', 'HH:mm');
+  const name = dateStr + '.md';
+  const body = (parsed.body || parsed.summary || '').trim();
+  const block = '## ' + timeStr + '\n\n' + body + '\n';
+
+  const it = folder.getFilesByName(name);
+  if (it.hasNext()) {
+    const file = it.next();
+    const existing = file.getBlob().getDataAsString('UTF-8');
+    file.setContent(existing.replace(/\s+$/, '') + '\n\n' + block);
+    return file;
+  }
+  const header =
+    '---\n' +
+    'date: ' + dateStr + '\n' +
+    'tags: []\n' +
+    'source: voice\n' +
+    '---\n\n';
+  return folder.createFile(name, header + block, 'text/markdown');
 }
 
 // ── Gemini 전사 ─────────────────────────────────────

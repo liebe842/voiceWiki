@@ -71,6 +71,29 @@
       appearance: none; cursor: pointer;
     }
     .repo-picker select:disabled { opacity: .5; cursor: default; }
+
+    /* 탭 */
+    .tabs { display: flex; gap: 8px; justify-content: center; margin: 12px 0 4px; flex-shrink: 0; }
+    .tabs button {
+      padding: 8px 18px; border-radius: 999px; border: 1px solid var(--border);
+      background: var(--card); color: var(--muted); font-size: 14px; font-weight: 600;
+      cursor: pointer; transition: background .15s ease, color .15s ease;
+    }
+    .tabs button.active { background: var(--accent); color: #fff; border-color: transparent; }
+
+    /* 패널 (활성 하나만 flex로 화면 채움) */
+    .panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+    .panel[hidden] { display: none; }
+
+    /* 카톡 붙여넣기 영역 */
+    .kakao-area { flex: 1; min-height: 0; width: 100%; max-width: 560px;
+                  margin: 0 auto; display: flex; }
+    .kakao-area textarea {
+      flex: 1; width: 100%; resize: none; border-radius: 14px;
+      border: 1px solid var(--border); background: var(--card); color: var(--text);
+      padding: 14px; font-size: 15px; line-height: 1.5; font-family: inherit;
+    }
+    .kakao-area textarea:focus { outline: none; border-color: var(--accent-dim); }
   </style>
 </head>
 <body>
@@ -79,6 +102,12 @@
     <p>말하면 위키에 쌓입니다</p>
   </header>
 
+  <nav class="tabs">
+    <button id="tabVoice" class="active">🎙️ 음성</button>
+    <button id="tabKakao">💬 카톡</button>
+  </nav>
+
+  <section class="panel" id="voicePanel">
   <main>
     <div class="timer" id="timer">00:00</div>
     <button class="rec-btn" id="recBtn">
@@ -100,6 +129,26 @@
     <button class="btn-reset" id="resetBtn" disabled>다시</button>
     <button class="btn-save" id="saveBtn" disabled>위키에 저장</button>
   </div>
+  </section>
+
+  <section class="panel" id="kakaoPanel" hidden>
+    <div class="kakao-area">
+      <textarea id="kakaoText" placeholder="카카오톡 대화를 붙여넣으세요&#10;&#10;정보·팁·링크 위주로 정리해 선택한 저장소의 kakao 폴더에 저장됩니다."></textarea>
+    </div>
+
+    <div class="repo-picker">
+      <label for="kakaoRepoSelect">저장소</label>
+      <select id="kakaoRepoSelect" disabled>
+        <option value="">저장소 불러오는 중…</option>
+      </select>
+    </div>
+
+    <div class="status" id="kakaoStatus">정보·팁·링크를 정리해 저장됩니다</div>
+    <div class="actions">
+      <button class="btn-reset" id="kakaoClear">비우기</button>
+      <button class="btn-save" id="kakaoSave">위키에 저장</button>
+    </div>
+  </section>
 
   <script>
     // ── 설정 ────────────────────────────────────────────
@@ -116,7 +165,7 @@
     const recBtn = el('recBtn'), recIcon = el('recIcon'), recLabel = el('recLabel');
     const saveBtn = el('saveBtn'), resetBtn = el('resetBtn');
     const statusEl = el('status'), timerEl = el('timer'), player = el('player');
-    const repoSelect = el('repoSelect');
+    const repoSelect = el('repoSelect'), kakaoRepoSelect = el('kakaoRepoSelect');
 
     function setStatus(msg, kind) {
       statusEl.textContent = msg;
@@ -124,28 +173,38 @@
     }
 
     // ── 저장소 선택 ──────────────────────────────────────
+    // 음성 탭과 카톡 탭이 같은 저장소 목록을 쓰되, 선택은 각자 기억(별도 키).
     const REPO_KEY = 'vw_repo';
+    const KAKAO_REPO_KEY = 'vw_kakao_repo';
     // JSONP 실패 시 폴백 라벨(백엔드 REPOS와 일치). 정상 로드되면 서버 라벨로 덮어씀.
     const FALLBACK_REPOS = [{ key: 'voice', name: '바이브코딩' }, { key: 'second', name: '일상기록' }];
 
-    function fillRepos(repos) {
-      const list = (repos && repos.length) ? repos : FALLBACK_REPOS;
-      const saved = localStorage.getItem(REPO_KEY);
-      repoSelect.innerHTML = '';
+    // 하나의 select에 저장소 목록을 채우고, 저장된 선택을 복원한다.
+    function fillSelect(select, storageKey, list) {
+      const saved = localStorage.getItem(storageKey);
+      select.innerHTML = '';
       list.forEach((r) => {
         const opt = document.createElement('option');
         opt.value = r.key;
         opt.textContent = r.name;
-        repoSelect.appendChild(opt);
+        select.appendChild(opt);
       });
-      // 저장된 선택이 목록에 있으면 복원, 없으면 첫 번째
-      if (saved && list.some((r) => r.key === saved)) repoSelect.value = saved;
-      else localStorage.setItem(REPO_KEY, repoSelect.value);
-      repoSelect.disabled = false;
+      if (saved && list.some((r) => r.key === saved)) select.value = saved;
+      else localStorage.setItem(storageKey, select.value);
+      select.disabled = false;
+    }
+
+    function fillRepos(repos) {
+      const list = (repos && repos.length) ? repos : FALLBACK_REPOS;
+      fillSelect(repoSelect, REPO_KEY, list);
+      fillSelect(kakaoRepoSelect, KAKAO_REPO_KEY, list);
     }
 
     repoSelect.addEventListener('change', () => {
       localStorage.setItem(REPO_KEY, repoSelect.value);
+    });
+    kakaoRepoSelect.addEventListener('change', () => {
+      localStorage.setItem(KAKAO_REPO_KEY, kakaoRepoSelect.value);
     });
 
     // JSONP로 폴더 이름 목록을 로드(no-cors 때문에 fetch로는 응답을 못 읽음).
@@ -267,6 +326,66 @@
         recBtn.disabled = false;
         setStatus('전송 실패: ' + err.message, 'err');
         saveBtn.disabled = false; resetBtn.disabled = false;
+      }
+    });
+
+    // ── 탭 전환 (음성 / 카톡) ────────────────────────────
+    const TAB_KEY = 'vw_tab';
+    const tabVoice = el('tabVoice'), tabKakao = el('tabKakao');
+    const voicePanel = el('voicePanel'), kakaoPanel = el('kakaoPanel');
+
+    function setTab(tab) {
+      const kakao = tab === 'kakao';
+      kakaoPanel.hidden = !kakao;
+      voicePanel.hidden = kakao;
+      tabKakao.classList.toggle('active', kakao);
+      tabVoice.classList.toggle('active', !kakao);
+      localStorage.setItem(TAB_KEY, tab);
+    }
+    tabVoice.addEventListener('click', () => setTab('voice'));
+    tabKakao.addEventListener('click', () => setTab('kakao'));
+    setTab(localStorage.getItem(TAB_KEY) === 'kakao' ? 'kakao' : 'voice');
+
+    // ── 카톡 정리·저장 ───────────────────────────────────
+    const kakaoText = el('kakaoText'), kakaoSave = el('kakaoSave'), kakaoClear = el('kakaoClear');
+    const kakaoStatusEl = el('kakaoStatus');
+
+    function setKakaoStatus(msg, kind) {
+      kakaoStatusEl.textContent = msg;
+      kakaoStatusEl.className = 'status' + (kind ? ' ' + kind : '');
+    }
+
+    kakaoClear.addEventListener('click', () => {
+      kakaoText.value = '';
+      setKakaoStatus('정보·팁·링크를 정리해 raw/kakao에 저장됩니다', null);
+      kakaoText.focus();
+    });
+
+    kakaoSave.addEventListener('click', async () => {
+      const text = kakaoText.value.trim();
+      if (!text) { setKakaoStatus('먼저 대화를 붙여넣으세요', 'err'); return; }
+      kakaoSave.disabled = true; kakaoClear.disabled = true;
+      setKakaoStatus('정리 중…', null);
+      try {
+        // GAS는 no-cors 응답을 못 읽으므로 낙관적으로 처리(fire-and-forget).
+        await fetch(GAS_URL, {
+          method: 'POST',
+          mode: 'no-cors',
+          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+          body: JSON.stringify({
+            token: TOKEN,
+            text: text,
+            kind: 'kakao',
+            ts: new Date().toISOString(),
+            repo: kakaoRepoSelect.value || localStorage.getItem(KAKAO_REPO_KEY) || 'voice'
+          })
+        });
+        setKakaoStatus('✅ 전송됨 — Drive raw/kakao 폴더를 확인하세요', 'ok');
+        kakaoText.value = '';
+      } catch (err) {
+        setKakaoStatus('전송 실패: ' + err.message, 'err');
+      } finally {
+        kakaoSave.disabled = false; kakaoClear.disabled = false;
       }
     });
   </script>

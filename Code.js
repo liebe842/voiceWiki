@@ -120,6 +120,18 @@ function doPost(e) {
   try {
     const body = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     if (body.token !== VW_TOKEN) return json({ ok: false, error: 'unauthorized' });
+
+    // 카톡 탭: 텍스트 페이로드면 대화를 정리해 raw/kakao에 .md 저장 (음성과 별도 흐름)
+    if (body.kind === 'kakao' || body.text) {
+      if (!body.text || !body.text.trim()) return json({ ok: false, error: 'no text' });
+      const kFolder = getKakaoFolder_(body.repo);
+      const kWhen = body.ts ? new Date(body.ts) : new Date();
+      const kNameBase = 'kakao_' + timestampName(body.ts);
+      const kParsed = summarizeKakao_(body.text);
+      const kMd = writeMarkdown_(kFolder, kNameBase, kWhen, kParsed, 'kakao');
+      return json({ ok: true, md: kMd.getName(), title: kParsed.title });
+    }
+
     if (!body.audio) return json({ ok: false, error: 'no audio' });
 
     const folder = resolveFolder_(body.repo);
@@ -154,6 +166,41 @@ function resolveFolder_(repoKey) {
   return DriveApp.getFolderById(repo.id);
 }
 
+// 카톡 저장 목적지: repo 키 → 볼트 최상위 폴더 이름 기준 경로.
+// 볼트마다 레이아웃이 달라 경로가 다르다: claude-code-wiki는 raw/ 하위, daily-journal은 루트 하위.
+// 경로의 첫 요소(볼트 최상위)는 이름으로 전역 검색해 찾고, 그 아래는 하위 폴더로 내려간다.
+// (상위로 걸어 올라가면 공유 폴더의 부모가 접근 불가라 실패하므로 이름 검색을 쓴다.)
+// 저장소를 추가하려면 여기에 repo 키 → 경로 배열 한 줄만 추가.
+const KAKAO_PATHS = {
+  voice:  ['claude-code-wiki', 'raw', 'kakao'], // 바이브코딩 → claude-code-wiki/raw/kakao
+  second: ['daily-journal', 'kakao'],           // 일상기록 → daily-journal/kakao
+};
+const KAKAO_DEFAULT = 'voice';
+
+/**
+ * 카톡 정리 노트를 저장할 폴더를 repo 키로 해석해 반환(경로 각 단계는 없으면 생성).
+ * 첫 요소는 볼트 최상위 폴더(이름 검색), 이후는 하위 폴더 이름으로 내려간다.
+ */
+function getKakaoFolder_(repoKey) {
+  const path = (KAKAO_PATHS[repoKey] || KAKAO_PATHS[KAKAO_DEFAULT]).slice();
+  let folder = findTopFolder_(path.shift());
+  for (let i = 0; i < path.length; i++) folder = childFolder_(folder, path[i]);
+  return folder;
+}
+
+/** 접근 가능한 폴더 중 이름이 name인 최상위 볼트 폴더를 반환. 없으면 에러. */
+function findTopFolder_(name) {
+  const it = DriveApp.getFoldersByName(name);
+  if (!it.hasNext()) throw new Error("'" + name + "' 폴더를 찾을 수 없음");
+  return it.next();
+}
+
+/** 부모 폴더에서 name 하위 폴더를 찾고, 없으면 생성해 반환. */
+function childFolder_(parent, name) {
+  const it = parent.getFoldersByName(name);
+  return it.hasNext() ? it.next() : parent.createFolder(name);
+}
+
 /** base64 오디오를 폴더에 저장하고 File을 반환. */
 function saveAudioToFolder_(folder, base64Data, mimeType, nameBase) {
   const ext = extensionForMime(mimeType);
@@ -163,14 +210,14 @@ function saveAudioToFolder_(folder, base64Data, mimeType, nameBase) {
   return folder.createFile(blob);
 }
 
-/** 위키 스키마에 맞춘 .md 파일을 만든다. */
-function writeMarkdown_(folder, nameBase, whenDate, parsed) {
+/** 위키 스키마에 맞춘 .md 파일을 만든다. tag는 프론트매터 tags 값(기본 'voice'). */
+function writeMarkdown_(folder, nameBase, whenDate, parsed, tag) {
   const updated = Utilities.formatDate(whenDate, 'Asia/Seoul', 'yyyy-MM-dd');
   const md =
     '---\n' +
-    'title: ' + parsed.title + '\n' +
+    'title: ' + yamlStr_(parsed.title) + '\n' +
     'type: source\n' +
-    'tags: [voice]\n' +
+    'tags: [' + (tag || 'voice') + ']\n' +
     'sources: []\n' +
     'updated: ' + updated + '\n' +
     '---\n\n' +
@@ -236,6 +283,59 @@ function transcribe_(base64, mimeType) {
   };
 }
 
+// ── Gemini 카톡 정리 ─────────────────────────────────
+
+/**
+ * 붙여넣은 카카오톡 대화를 정보·팁·링크 위주로 정리해 {title, summary, body}를 반환.
+ * 전사(transcribe_)와 같은 Gemini 호출 패턴이되 오디오 대신 대화 텍스트를 넣는다.
+ * @param {string} convo - 카톡에서 긁어온 대화 원문
+ */
+function summarizeKakao_(convo) {
+  const prompt =
+    '다음은 사용자가 카카오톡에서 긁어와 붙여넣은 대화입니다. 이 대화에서 나중에 다시 볼 가치가 있는\n' +
+    '내용만 골라 한국어로 정리하세요. 목적은 "정보·팁·링크"의 보존입니다.\n' +
+    '- 인사·잡담·감정표현·중복·군더더기는 버리세요. 사실을 지어내지 마세요.\n' +
+    '- 공유된 URL/링크는 원문 그대로 보존하세요(요약하거나 축약하지 말 것).\n' +
+    '- 아래 JSON 형식으로만 응답하세요. 다른 텍스트 금지.\n' +
+    '{"title": "대화의 요지를 대표하는 짧은 제목 한 줄", ' +
+    '"summary": "핵심을 1~2문장으로 요약", ' +
+    '"body": "정리 본문. 다음 마크다운 섹션 구조를 따르되 내용 없는 섹션은 생략: ' +
+    '## 핵심 정보\\n- ...\\n## 팁·노하우\\n- ...\\n## 링크·자료\\n- (URL 원문)"}\n\n' +
+    '=== 대화 ===\n' + convo;
+
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { responseMimeType: 'application/json' }
+  };
+
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/' +
+    GEMINI_MODEL + ':generateContent?key=' + getGeminiKey_();
+  const res = UrlFetchApp.fetch(url, {
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify(payload),
+    muteHttpExceptions: true
+  });
+
+  const code = res.getResponseCode();
+  const text = res.getContentText();
+  if (code !== 200) throw new Error('Gemini ' + code + ': ' + text.slice(0, 500));
+
+  const data = JSON.parse(text);
+  const cand = data.candidates && data.candidates[0];
+  const part = cand && cand.content && cand.content.parts && cand.content.parts[0];
+  if (!part || !part.text) {
+    throw new Error('Gemini 빈 응답: ' + text.slice(0, 500));
+  }
+
+  const parsed = JSON.parse(part.text);
+  return {
+    title: (parsed.title || '카톡 메모').trim(),
+    summary: (parsed.summary || '').trim(),
+    body: (parsed.body || '').trim()
+  };
+}
+
 // ── 유틸 ────────────────────────────────────────────
 
 /** 녹음 시각 기반 파일명 베이스 (YYYY-MM-DD_HHmm), Asia/Seoul 기준 */
@@ -264,6 +364,11 @@ function mimeFromName_(name) {
   if (n.endsWith('.wav')) return 'audio/wav';
   if (n.endsWith('.mp3')) return 'audio/mp3';
   return 'audio/ogg';
+}
+
+/** YAML 프론트매터에 안전하게 넣을 문자열(콜론·따옴표 등 포함 대비 큰따옴표로 감싸고 이스케이프). */
+function yamlStr_(s) {
+  return '"' + String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
 }
 
 /** JSON 응답 헬퍼 */

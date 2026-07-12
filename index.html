@@ -14,18 +14,22 @@
     body {
       background: var(--bg); color: var(--text);
       font-family: -apple-system, "Noto Sans KR", "Malgun Gothic", sans-serif;
-      display: flex; flex-direction: column; min-height: 100vh;
-      padding: 24px 20px calc(24px + env(safe-area-inset-bottom));
+      display: flex; flex-direction: column;
+      height: 100vh;            /* 폴백 */
+      height: 100dvh;           /* 모바일 주소창 반영한 실제 뷰포트 높이 */
+      overflow: hidden;         /* 한 화면에 고정 — 스크롤 방지 */
+      padding: clamp(12px, 2.5vh, 24px) 20px calc(clamp(12px, 2.5vh, 24px) + env(safe-area-inset-bottom));
     }
-    header { text-align: center; padding-top: 8px; }
+    header { text-align: center; }
     header h1 { font-size: 22px; margin: 0; letter-spacing: -0.5px; }
     header p { color: var(--muted); font-size: 13px; margin: 6px 0 0; }
 
-    main { flex: 1; display: flex; flex-direction: column; align-items: center;
-           justify-content: center; gap: 28px; }
+    main { flex: 1; min-height: 0; display: flex; flex-direction: column;
+           align-items: center; justify-content: center; gap: clamp(10px, 2.4vh, 28px); }
 
     .rec-btn {
-      width: 200px; height: 200px; border-radius: 50%; border: none;
+      width: clamp(150px, 34vh, 200px); height: clamp(150px, 34vh, 200px);
+      flex-shrink: 0; border-radius: 50%; border: none;
       background: var(--accent); color: #fff; font-size: 20px; font-weight: 600;
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       gap: 10px; cursor: pointer; transition: transform .1s ease, background .2s ease;
@@ -47,7 +51,7 @@
 
     .actions { display: flex; gap: 12px; width: 100%; max-width: 420px; margin: 0 auto; }
     .actions button {
-      flex: 1; padding: 18px; font-size: 17px; font-weight: 600; border-radius: 14px;
+      flex: 1; padding: clamp(13px, 2.2vh, 18px); font-size: 17px; font-weight: 600; border-radius: 14px;
       border: 1px solid var(--border); cursor: pointer;
       transition: transform .1s ease, opacity .2s ease;
     }
@@ -56,10 +60,10 @@
     .btn-save { background: var(--ok); color: #04150a; border-color: transparent; }
     .btn-reset { background: var(--card); color: var(--text); }
 
-    audio { width: 100%; max-width: 420px; margin: 0 auto; }
+    audio { width: 100%; max-width: 420px; margin: 0 auto; height: 40px; }
 
     .repo-picker { display: flex; flex-direction: column; gap: 6px; width: 100%;
-                   max-width: 420px; margin: 16px auto 0; }
+                   max-width: 420px; margin: 0 auto; }
     .repo-picker label { color: var(--muted); font-size: 12px; padding-left: 2px; }
     .repo-picker select {
       width: 100%; padding: 12px 14px; font-size: 15px; border-radius: 12px;
